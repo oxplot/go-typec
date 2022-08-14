@@ -71,8 +71,8 @@ const EventNone Event = 0
 const (
 	EventResetReceived Event = 1 << iota // Hard reset received
 	EventSendReset                       // Request to send hard reset signal to port partner
-	EventPower0A5                        // 5V@0.5mA non-PD power source
-	EventPower1A5                        // 5V@1.5mA non-PD power source
+	EventPower0A5                        // 5V@0.5A non-PD power source
+	EventPower1A5                        // 5V@1.5A non-PD power source
 	EventPower3A0                        // 5V@3A non-PD power source
 	EventAttached                        // VBUS power detected
 	EventDetached                        // VBUS power lost
