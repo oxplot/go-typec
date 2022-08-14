@@ -1,3 +1,6 @@
+[![Go
+Reference](https://pkg.go.dev/badge/github.com/oxplot/go-typec.svg)](https://pkg.go.dev/github.com/oxplot/go-typec)
+
 **USB Type-C Power Delivery Module for Go**
 
 At the moment, only sink functionality is implemented. Sink refers to a
