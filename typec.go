@@ -65,7 +65,7 @@ func (e Event) String() string {
 // EventNone represents no event.
 const EventNone Event = 0
 
-// The events below are listed in order of priority from highest to lowest. This
+// The events are listed in order of priority from highest to lowest. This
 // means that in presence of multiple pending events, highest priority one is
 // attended to first.
 const (

@@ -29,6 +29,9 @@ type Message struct {
 
 // ToBytes serializes the message to a byte slice and returns the number of
 // bytes written.
+//
+// b must be at least [MaxMessageBytes] long in order to accomodate the largest
+// possible message.
 func (m Message) ToBytes(b []byte) uint8 {
 	b[0] = byte(m.Header & 0xff)
 	b[1] = byte((m.Header >> 8) & 0xff)
