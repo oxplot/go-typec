@@ -315,9 +315,9 @@ func NewLogger(w io.Writer, lineSep string, passthrough typec.DevicePolicyManage
 	}
 }
 
-// EvaluateCapabilities evaluates the provided power profiles against the policy
-// and returns a RequestDO that can be used to negotiate with the power
-// source.
+// EvaluateCapabilities writes out the textual description of the provided
+// power data objects and passes it down to the underlying DPM and returns its
+// response.
 func (l *Logger) EvaluateCapabilities(pdos []pdmsg.PDO) pdmsg.RequestDO {
 	fmt.Fprintf(l.w, "Received %d profiles:%s", len(pdos), l.sep)
 	for i, p := range pdos {
