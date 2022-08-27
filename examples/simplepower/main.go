@@ -1,18 +1,14 @@
 // SimplePower negotiates a constant voltage at a maximum current with the power
 // source. This is the most common usage.
 //
-// To configure, set the global const minVoltage, maxVoltage and minCurrent to
+// To configure, set the global const minVoltage, maxVoltage and maxCurrent to
 // your desired values.
 package main
 
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
-
-	"periph.io/x/conn/v3/i2c/i2creg"
-	"periph.io/x/host/v3"
 
 	"github.com/oxplot/go-typec/tcdpm"
 	"github.com/oxplot/go-typec/tcpcdriver/fusb302"
@@ -20,12 +16,11 @@ import (
 )
 
 const (
-	mpn       = fusb302.FUSB302BMPX
-	busNumber = "1"
+	mpn = fusb302.FUSB302BMPX
 
 	minVoltage = 8000  // minimum acceptable voltage in mV
 	maxVoltage = 10000 // maximum acceptable voltage in mV
-	minCurrent = 1200  // minimum acceptable current in mA
+	maxCurrent = 1200  // minimum acceptable current in mA
 )
 
 func powerChangeCallback(det tcpe.PowerChangeDetail) {
@@ -37,24 +32,13 @@ func powerChangeCallback(det tcpe.PowerChangeDetail) {
 }
 
 func main() {
-	log.SetFlags(0)
-	if _, err := host.Init(); err != nil {
-		log.Fatal(err)
-	}
-	b, err := i2creg.Open(busNumber)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer b.Close()
-	b.SetSpeed(1000000)
-
-	pc := fusb302.New(b, mpn)
+	pc := fusb302.New(getI2C(), mpn)
 	pe := tcpe.New(pc)
 	dpm := tcdpm.CV{}
 	dpm.SetPolicy(tcdpm.CVPolicy{
 		MinVoltage: minVoltage,
 		MaxVoltage: maxVoltage,
-		MinCurrent: minCurrent,
+		MaxCurrent: maxCurrent,
 	})
 	pe.SetDPM(tcdpm.NewLogger(os.Stdout, "\r\n", &dpm))
 	pe.NotifyOnPowerChange(powerChangeCallback)
