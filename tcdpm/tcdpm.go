@@ -144,9 +144,9 @@ type CVPolicy struct {
 	// Maximum accepted voltage in millivolts.
 	MaxVoltage uint16
 
-	// Minimum current in milliamps that the source must be able to supply
+	// Maximum current in milliamps that the source must be able to supply
 	// across the entire range of voltages between MinVoltage and MaxVoltage.
-	MinCurrent uint16
+	MaxCurrent uint16
 
 	// If a source provides multiple profile within the voltage range of a
 	// policy, it's possible to prefer lower voltage profiles than the default
@@ -167,7 +167,7 @@ type CV struct {
 	policy CVPolicy
 }
 
-const cvOvercurrentMargin = 150 // mA
+const cvOvercurrentMargin = 100 // mA
 
 // SetPolicy updates the existing policy. Any future power negotiations will use
 // the new policy. If immediate renegotation of power based on the new policy is
@@ -195,7 +195,7 @@ func (c *CV) EvaluateCapabilities(pdos []pdmsg.PDO) pdmsg.RequestDO {
 	policy := c.policy
 	c.mu.Unlock()
 
-	ppsMinCurrent := c.policy.MinCurrent + cvOvercurrentMargin
+	ppsMaxCurrent := c.policy.MaxCurrent + cvOvercurrentMargin
 
 	var bestVoltage uint16
 	if policy.PreferLowerVoltage {
@@ -207,11 +207,11 @@ func (c *CV) EvaluateCapabilities(pdos []pdmsg.PDO) pdmsg.RequestDO {
 		case pdmsg.PDOTypeFixedSupply:
 			fs := pdmsg.FixedSupplyPDO(p)
 			v := fs.Voltage()
-			if v >= c.policy.MinVoltage && v <= c.policy.MaxVoltage && fs.MaxCurrent() >= c.policy.MinCurrent {
+			if v >= c.policy.MinVoltage && v <= c.policy.MaxVoltage && fs.MaxCurrent() >= c.policy.MaxCurrent {
 				if (policy.PreferLowerVoltage && v < bestVoltage) || (!policy.PreferLowerVoltage && v > bestVoltage) {
 					rdo.SetSelectedObjectPosition(uint8(i) + 1)
-					rdo.SetFixedMaxOperatingCurrent(c.policy.MinCurrent)
-					rdo.SetFixedOperatingCurrent(c.policy.MinCurrent)
+					rdo.SetFixedMaxOperatingCurrent(c.policy.MaxCurrent)
+					rdo.SetFixedOperatingCurrent(c.policy.MaxCurrent)
 					bestVoltage = v
 				}
 			}
@@ -224,16 +224,16 @@ func (c *CV) EvaluateCapabilities(pdos []pdmsg.PDO) pdmsg.RequestDO {
 			if maxV > pps.MaxVoltage() {
 				maxV = pps.MaxVoltage()
 			}
-			if minV <= maxV && ppsMinCurrent <= pps.MaxCurrent() {
+			if minV <= maxV && ppsMaxCurrent <= pps.MaxCurrent() {
 				if policy.PreferLowerVoltage && minV < bestVoltage {
 					rdo.SetSelectedObjectPosition(uint8(i) + 1)
 					rdo.SetPPSOutputVoltage(minV)
-					rdo.SetPPSOutputCurrent(c.policy.MinCurrent)
+					rdo.SetPPSOutputCurrent(c.policy.MaxCurrent)
 					bestVoltage = minV
 				} else if !policy.PreferLowerVoltage && maxV > bestVoltage {
 					rdo.SetSelectedObjectPosition(uint8(i) + 1)
 					rdo.SetPPSOutputVoltage(maxV)
-					rdo.SetPPSOutputCurrent(c.policy.MinCurrent)
+					rdo.SetPPSOutputCurrent(c.policy.MaxCurrent)
 					bestVoltage = maxV
 				}
 			}
@@ -249,15 +249,15 @@ func (c *CV) EvaluateCapabilities(pdos []pdmsg.PDO) pdmsg.RequestDO {
 // voltage output of the supply.
 type CPPolicy struct {
 
-	// Mininimum accepted voltage in millivolts.
+	// Minimum accepted voltage in millivolts.
 	MinVoltage uint16
 
 	// Maximum accepted voltage in millivolts.
 	MaxVoltage uint16
 
-	// Minimum power in milliwatts that the source must be able to supply
+	// Maximum power in milliwatts that the source must be able to supply
 	// across the entire range of voltages between MinVoltage and MaxVoltage.
-	MinPower uint16
+	MaxPower uint16
 
 	// If a source provides multiple profile within the voltage range of a
 	// policy, it's possible to prefer lower voltage profiles than the default
@@ -292,7 +292,64 @@ func (c *CP) GetPolicy() CPPolicy {
 	return c.policy
 }
 
-// TODO
+// EvaluateCapabilities evaluates the provided power profiles against the policy
+// and returns a RequestDO that can be used to negotiate with the power
+// source.
+func (c *CP) EvaluateCapabilities(pdos []pdmsg.PDO) pdmsg.RequestDO {
+	c.mu.Lock()
+	policy := c.policy
+	c.mu.Unlock()
+
+	var bestVoltage uint16
+	if policy.PreferLowerVoltage {
+		bestVoltage = ^uint16(0)
+	}
+	rdo := pdmsg.EmptyRequestDO
+	for i, p := range pdos {
+		switch p.Type() {
+		case pdmsg.PDOTypeFixedSupply:
+			fs := pdmsg.FixedSupplyPDO(p)
+			v := fs.Voltage()
+			maxCur := c.policy.MaxPower / v
+			if v >= c.policy.MinVoltage && v <= c.policy.MaxVoltage && fs.MaxCurrent() >= maxCur {
+				if (policy.PreferLowerVoltage && v < bestVoltage) || (!policy.PreferLowerVoltage && v > bestVoltage) {
+					rdo.SetSelectedObjectPosition(uint8(i) + 1)
+					rdo.SetFixedMaxOperatingCurrent(maxCur)
+					rdo.SetFixedOperatingCurrent(maxCur)
+					bestVoltage = v
+				}
+			}
+		case pdmsg.PDOTypePPS:
+			pps := pdmsg.PPSPDO(p)
+			minV, maxV := c.policy.MinVoltage, c.policy.MaxVoltage
+			if minV < pps.MinVoltage() {
+				minV = pps.MinVoltage()
+			}
+			if maxV > pps.MaxVoltage() {
+				maxV = pps.MaxVoltage()
+			}
+			if minV <= maxV {
+				maxC := c.policy.MaxPower/maxV + cvOvercurrentMargin
+				minPV := c.policy.MaxPower / (pps.MaxCurrent() - cvOvercurrentMargin)
+				if minPV < minV {
+					minPV = minV
+				}
+				if policy.PreferLowerVoltage && minPV < bestVoltage && minPV <= maxV {
+					rdo.SetSelectedObjectPosition(uint8(i) + 1)
+					rdo.SetPPSOutputVoltage(minPV)
+					rdo.SetPPSOutputCurrent(c.policy.MaxPower / minPV)
+					bestVoltage = minPV
+				} else if !policy.PreferLowerVoltage && maxV > bestVoltage && maxC <= pps.MaxCurrent() {
+					rdo.SetSelectedObjectPosition(uint8(i) + 1)
+					rdo.SetPPSOutputVoltage(maxV)
+					rdo.SetPPSOutputCurrent(maxC)
+					bestVoltage = maxV
+				}
+			}
+		}
+	}
+	return rdo
+}
 
 // Logger writes a textual description of source capabilities to a given
 // io.Writer. It's mostly used for debugging purposes.
