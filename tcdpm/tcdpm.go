@@ -387,8 +387,12 @@ func (l *Logger) EvaluateCapabilities(pdos []pdmsg.PDO) pdmsg.RequestDO {
 			fmt.Fprint(l.w, "Variable (not supported)")
 		case pdmsg.PDOTypePPS:
 			pps := pdmsg.PPSPDO(p)
+			var powerLimited string
+			if pps.IsPowerLimited() {
+				powerLimited = " (power limited)"
+			}
 			minV, maxV, maxC := float32(pps.MinVoltage())/1000, float32(pps.MaxVoltage())/1000, float32(pps.MaxCurrent())/1000
-			fmt.Fprintf(l.w, "Programmable %.1f-%.1fV @ max. %.1fA", minV, maxV, maxC)
+			fmt.Fprintf(l.w, "Programmable %.1f-%.1fV @ max. %.1fA%s", minV, maxV, maxC, powerLimited)
 		case pdmsg.PDOTypeBattery:
 			fmt.Fprint(l.w, "Battery (not supported)")
 		case pdmsg.PDOTypeEPRAVS:

@@ -241,6 +241,20 @@ func NewPPSPDO() PPSPDO {
 	return PPSPDO(0b11) << 30
 }
 
+// IsPowerLimited returns true if the PPS Power Limited flag is set.
+func (o PPSPDO) IsPowerLimited() bool {
+	return (o & (1 << 27)) != 0
+}
+
+// SetPowerLimited sets the PPS Power Limited flag.
+func (o *PPSPDO) SetPowerLimited(v bool) {
+	if v {
+		*o |= 1 << 27
+	} else {
+		*o &= ^PPSPDO(1 << 27)
+	}
+}
+
 // MinVoltage returns minimum voltage in millivolts.
 func (o PPSPDO) MinVoltage() uint16 {
 	return ((uint16(o) >> 8) & (uint16(1)<<8 - 1)) * 100
