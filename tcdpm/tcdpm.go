@@ -51,7 +51,7 @@ type CCPolicy struct {
 	MaxVoltage uint16
 
 	// Maximum current in milliamps that should be supplied under all load
-	// conditions.
+	// conditions. Note that per standard, MaxCurrent must be >= 1000mA.
 	MaxCurrent uint16
 
 	// If a source provides multiple profile within the voltage range of a
