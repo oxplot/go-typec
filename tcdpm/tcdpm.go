@@ -5,10 +5,76 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/oxplot/go-typec/pdmsg"
 	"github.com/oxplot/go-typec/tcpe"
 )
+
+// PolicyManager manages the policy engine and provides a simple interface for
+// negotiating power with a power source.
+type PolicyManager struct {
+	mu      sync.Mutex
+	policy  Policy
+	pe      *tcpe.PolicyEngine
+	lastRDO pdmsg.RequestDO
+	pg      func(bool)
+}
+
+// NewPolicyManager creates a new PolicyManager which will use the given
+// policy engine to negotiate power with the power source.
+// powerGood is called when the power state changes. It is called with true
+// when power is successfully negotiated and ready for use. It is called with
+// false when the power source is disconnected or the power negotiation fails.
+func NewPolicyManager(pe *tcpe.PolicyEngine, powerGood func(bool)) *PolicyManager {
+	pm := &PolicyManager{
+		pe: pe,
+		pg: powerGood,
+	}
+	pe.SetCapabilityEvaluator(pm)
+	pe.SetEventHandler(pm)
+	return pm
+}
+
+// SetPolicy sets the power management policy. If policy validation fails,
+// non-nil error is returned.
+// SetPolicy can be called concurrently from multiple goroutines.
+func (pm *PolicyManager) SetPolicy(p Policy) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.policy = p
+	return nil
+}
+
+// HandleEvent handles an event from the policy engine.
+func (pm *PolicyManager) HandleEvent(e tcpe.Event) {
+	switch e {
+	case tcpe.EventPowerReady:
+		pm.pg(true)
+	case tcpe.EventPowerNotReady:
+		pm.pg(false)
+	case tcpe.EventRejected:
+		pm.pg(false)
+		pm.pe.Reset()
+	}
+}
+
+// EvaluateCapabilities evaluates the provided power profiles against the policy
+// and returns a RequestDO that can be used to negotiate with the power source.
+func (pm *PolicyManager) EvaluateCapabilities(pdos []pdmsg.PDO) pdmsg.RequestDO {
+	pm.mu.Lock()
+	p := pm.policy
+	pm.mu.Unlock()
+	if p == nil {
+		pm.lastRDO = pdmsg.EmptyRequestDO
+	} else {
+		pm.lastRDO = p.EvaluateCapabilities(pdos)
+	}
+	return pm.lastRDO
+}
 
 // Policy is the interface which simply embeds CapabilityEvaluator.
 type Policy interface {
