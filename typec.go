@@ -138,20 +138,6 @@ type PortController interface {
 	Alert() (Event, error)
 }
 
-// DevicePolicyManager makes high level decisions on how to configure the power
-// levels of the port partner.
-type DevicePolicyManager interface {
-
-	// EvaluateCapabilities is called every time the policy engine receives list
-	// of power capabilities from the source partner. If no PDO is acceptable,
-	// EvaluateCapabilities must return pdmsg.EmptyRequestDO. Device policy
-	// manager is expected to respond quickly with the request data object.
-	//
-	// The passed PDO slice may be modified by the policy manager but must not
-	// be stored in the manager's state past the call to this method.
-	EvaluateCapabilities([]pdmsg.PDO) pdmsg.RequestDO
-}
-
 var (
 	// ErrTxFailed is returned by Tx() if all auto-retries have failed.
 	ErrTxFailed = errors.New("failed to send pd message")

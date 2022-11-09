@@ -16,26 +16,69 @@ var (
 	defaultRDO     pdmsg.RequestDO
 )
 
+// CapabilityEvaluator is an interface that wraps the method EvaluateCapabilities.
+type CapabilityEvaluator interface {
+	// EvaluateCapabilities is called every time the policy engine receives list
+	// of power capabilities from the source partner. If no PDO is acceptable,
+	// EvaluateCapabilities must return pdmsg.EmptyRequestDO. Device policy
+	// manager is expected to respond quickly with the request data object.
+	//
+	// The passed PDO slice may be modified by the policy manager but must not
+	// be stored in the manager's state past the call to this method.
+	EvaluateCapabilities([]pdmsg.PDO) pdmsg.RequestDO
+}
+
+// CapabilityEvaluatorFunc is an adapter to allow the use of ordinary functions
+// as CapabilityEvaluator.
+type CapabilityEvaluatorFunc func([]pdmsg.PDO) pdmsg.RequestDO
+
+// EvaluateCapabilities implements CapabilityEvaluator interface.
+func (f CapabilityEvaluatorFunc) EvaluateCapabilities(pdos []pdmsg.PDO) pdmsg.RequestDO {
+	return f(pdos)
+}
+
+// Event is a policy engine event which is a high level event usually used by
+// DPMs. It's different to type-c events.
+type Event string
+
+const (
+	// EventAccepted is fired when the source accepts the RDO sent by the policy
+	// engine.
+	EventAccepted Event = "accepted"
+
+	// EventRejected is fired when the source rejects the RDO sent by the policy
+	// engine.
+	EventRejected Event = "rejected"
+
+	// EventPowerNotReady is fired on startup and reset.
+	EventPowerNotReady Event = "power_not_ready"
+
+	// EventPowerReady is fired when the policy engine has successfully negotiated
+	// power with the source and source has indicated that the requested power is
+	// ready for use.
+	EventPowerReady Event = "power_ready"
+)
+
+// EventHandler is an interface that wraps the method HandleEvent.
+type EventHandler interface {
+	// HandleEvent is called when the policy engine receives an event from the
+	// source partner.
+	HandleEvent(Event)
+}
+
+// EventHandlerFunc is an adapter to allow the use of ordinary functions as
+// EventHandler.
+type EventHandlerFunc func(Event)
+
+// HandleEvent implements EventHandler interface.
+func (e EventHandlerFunc) HandleEvent(ev Event) {
+	e(ev)
+}
+
 func init() {
 	defaultRDO.SetSelectedObjectPosition(1)
 	defaultRDO.SetFixedMaxOperatingCurrent(100)
 	defaultRDO.SetFixedOperatingCurrent(100)
-}
-
-// PowerChangeDetail represents the negotiated power when On==true.
-type PowerChangeDetail struct {
-	// On is true if the power was successfully negotiated and is available for
-	// use. false indicates that power satisfying policies is no longer available.
-	On bool
-
-	// Voltage is the voltage in millivolts that was negotiated.
-	Voltage uint16
-
-	// MaxCurrent is the maximum current in milliamps that is available for use, as negotiated.
-	MaxCurrent uint16
-
-	// CurrentSource is true if the power source is a current source.
-	CurrentSource bool
 }
 
 // PolicyEngine implements USB Type-C power delivery policy engine for sink
@@ -58,14 +101,10 @@ type PolicyEngine struct {
 	mu     sync.Mutex
 	events typec.Event
 
-	powerChangeCallback struct {
-		mu sync.Mutex
-		fn func(PowerChangeDetail)
-	}
-
-	dpm struct {
-		mu  sync.Mutex
-		dpm typec.DevicePolicyManager
+	callbacks struct {
+		mu           sync.Mutex
+		capEvaluator CapabilityEvaluator
+		eventHandler EventHandler
 	}
 
 	v5PDO pdmsg.FixedSupplyPDO // non-PD max current at 5V available from the power source
@@ -92,47 +131,37 @@ func New(pc typec.PortController) *PolicyEngine {
 	}
 }
 
-// SetDPM sets the device policy manager to use. Passing nil will result in the
-// policy engine rejecting all power negotiations.
-func (pe *PolicyEngine) SetDPM(dpm typec.DevicePolicyManager) {
-	pe.dpm.mu.Lock()
-	pe.dpm.dpm = dpm
-	pe.dpm.mu.Unlock()
+// SetCapabilityEvaluator sets the capability evaluator to use. Passing nil will
+// result in the policy engine rejecting all power negotiations.
+func (pe *PolicyEngine) SetCapabilityEvaluator(ce CapabilityEvaluator) {
+	pe.callbacks.mu.Lock()
+	pe.callbacks.capEvaluator = ce
+	pe.callbacks.mu.Unlock()
 }
 
-// NotifyOnPowerChange sets up callback to be called with boolean:
-//
-//   - true: When power negotiation is complete and power is ready to use. The
-//     negotiated PDO is the one selected by the invokation of
-//     DevicePolicyManager.EvaluateCapabilities. This is usually when the
-//     consumer turns on the power gate to the load.
-//   - false: When power as was negotiated is no longer (gauranteed to be)
-//     available. This is usually when the consumer turns of the power gate to
-//     the load.
-//
-// Pass nil as callback to remove existing one. This method can be called
-// concurrently from multiple goroutines.
-func (pe *PolicyEngine) NotifyOnPowerChange(callback func(PowerChangeDetail)) {
-	pe.powerChangeCallback.mu.Lock()
-	pe.powerChangeCallback.fn = callback
-	pe.powerChangeCallback.mu.Unlock()
+// SetEventHandler sets the event handler to send events to. Pass nil to remove
+// the existing handler.
+func (pe *PolicyEngine) SetEventHandler(e EventHandler) {
+	pe.callbacks.mu.Lock()
+	pe.callbacks.eventHandler = e
+	pe.callbacks.mu.Unlock()
 }
 
-// Renegotiate forces power renegotiation with source. Once the source sends
-// its capabilities, EvaluateCapabilities of
-// [typec.DevicePolicyManager] will be called.
-// Renogotiate may be called concurrently from multiple goroutines.
-func (pe *PolicyEngine) Renegotiate() {
+// Reset resets the policy engine and in effect the port controller to their
+// initial states. This will cause the power to be lost and renogotiation to
+// happen.
+// Reset may be called concurrently from multiple goroutines.
+func (pe *PolicyEngine) Reset() {
 	pe.mu.Lock()
 	pe.events.Add(typec.EventSendReset)
 	pe.mu.Unlock()
 }
 
 func (pe *PolicyEngine) evalCaps(pdos []pdmsg.PDO) pdmsg.RequestDO {
-	pe.dpm.mu.Lock()
-	defer pe.dpm.mu.Unlock()
-	if pe.dpm.dpm != nil {
-		return pe.dpm.dpm.EvaluateCapabilities(pdos)
+	pe.callbacks.mu.Lock()
+	defer pe.callbacks.mu.Unlock()
+	if pe.callbacks.capEvaluator != nil {
+		return pe.callbacks.capEvaluator.EvaluateCapabilities(pdos)
 	}
 	return pdmsg.EmptyRequestDO
 }
@@ -279,24 +308,11 @@ func (pe *PolicyEngine) sendRDO(rdo pdmsg.RequestDO) error {
 	return pe.tx(m)
 }
 
-func (pe *PolicyEngine) alertPCCB(on bool) {
-	pcd := PowerChangeDetail{On: on}
-	if on {
-		pdo := pdmsg.PDO(pe.sourceCapMsg.Data[pe.requestDO.SelectedObjectPosition()-1])
-		switch pdo.Type() {
-		case pdmsg.PDOTypeFixedSupply:
-			pcd.Voltage = pdmsg.FixedSupplyPDO(pdo).Voltage()
-			pcd.MaxCurrent = pe.requestDO.FixedMaxOperatingCurrent()
-		case pdmsg.PDOTypePPS:
-			pcd.Voltage = pe.requestDO.PPSOutputVoltage()
-			pcd.MaxCurrent = pe.requestDO.PPSOutputCurrent()
-			pcd.CurrentSource = true
-		}
-	}
-	pe.powerChangeCallback.mu.Lock()
-	defer pe.powerChangeCallback.mu.Unlock()
-	if pe.powerChangeCallback.fn != nil {
-		pe.powerChangeCallback.fn(pcd)
+func (pe *PolicyEngine) notifyEvent(e Event) {
+	pe.callbacks.mu.Lock()
+	defer pe.callbacks.mu.Unlock()
+	if pe.callbacks.eventHandler != nil {
+		pe.callbacks.eventHandler.HandleEvent(e)
 	}
 }
 
@@ -356,7 +372,12 @@ func init() {
 		Enter: func(pe *PolicyEngine) (*state, error) {
 			pe.pdoBuf[0] = pdmsg.PDO(pe.v5PDO)
 			rdo := pe.evalCaps(pe.pdoBuf[:1])
-			pe.alertPCCB(rdo != pdmsg.EmptyRequestDO)
+			if rdo == pdmsg.EmptyRequestDO {
+				pe.notifyEvent(EventPowerNotReady)
+			} else {
+				pe.notifyEvent(EventAccepted)
+				pe.notifyEvent(EventPowerReady)
+			}
 			return nil, nil
 		},
 		Process: func(pe *PolicyEngine, m pdmsg.Message, e typec.Event) (*state, error) {
@@ -369,7 +390,7 @@ func init() {
 		Enter: func(pe *PolicyEngine) (*state, error) {
 			pe.nextTxID = 0
 			pe.lastRxID = 8 // impossible ID meaning no message received yet
-			pe.alertPCCB(false)
+			pe.notifyEvent(EventPowerNotReady)
 			pe.explicitContract = false
 			return stateSinkDiscovery, pe.pc.Init()
 		},
@@ -388,6 +409,7 @@ func init() {
 	stateSinkWaitForCapabilities = &state{
 		Name: "sink-wait-for-cap",
 		Enter: func(pe *PolicyEngine) (*state, error) {
+			pe.sourceCapMsg = pdmsg.Message{}
 			pe.startTimer(timerSinkWaitCap)
 			return nil, nil
 		},
@@ -444,13 +466,16 @@ func init() {
 			if e == typec.EventRx && !m.IsData() {
 				switch m.Type() {
 				case pdmsg.TypeAccept:
+					pe.notifyEvent(EventAccepted)
 					pe.waitingOnSource = false
 					pe.explicitContract = true
 					return stateSinkTransitionSink, nil
 				case pdmsg.TypeReject:
-					// We deviate from standard here as we require the source to
-					// satisfy our request. If it can't, no reason to wait any more.
-					return stateSinkHardReset, nil
+					pe.notifyEvent(EventRejected)
+					if pe.explicitContract {
+						return stateSinkReady, nil
+					}
+					return stateSinkWaitForCapabilities, nil
 				case pdmsg.TypeWait:
 					pe.waitingOnSource = true
 					if pe.explicitContract {
@@ -474,9 +499,6 @@ func init() {
 				return stateSinkHardReset, nil
 			}
 			if e == typec.EventRx && !m.IsData() && m.Type() == pdmsg.TypePSReady {
-				if pe.requestDO != pdmsg.EmptyRequestDO {
-					pe.alertPCCB(true)
-				}
 				return stateSinkReady, nil
 			}
 			return nil, nil
@@ -486,6 +508,9 @@ func init() {
 	stateSinkReady = &state{
 		Name: "sink-ready",
 		Enter: func(pe *PolicyEngine) (*state, error) {
+			if pe.requestDO != pdmsg.EmptyRequestDO {
+				pe.notifyEvent(EventPowerReady)
+			}
 			if pe.waitingOnSource {
 				pe.startTimer(timerSinkRequest)
 			} else if pe.ppsNegotiated() {
@@ -507,6 +532,7 @@ func init() {
 	stateSinkHardReset = &state{
 		Name: "sink-hard-reset",
 		Enter: func(pe *PolicyEngine) (*state, error) {
+			pe.notifyEvent(EventPowerNotReady)
 			return stateSinkStartup, pe.pc.SendReset()
 		},
 	}
