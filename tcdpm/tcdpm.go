@@ -11,6 +11,9 @@ import (
 	"github.com/oxplot/go-typec/tcpe"
 )
 
+// PowerReadyFunc is a function that is called when the power state changes.
+type PowerReadyFunc func(isPowerReady bool, negotiatedVoltage uint16, negotiatedCurrent uint16)
+
 // PolicyManager manages the policy engine and provides a simple interface for
 // negotiating power with a power source.
 type PolicyManager struct {
@@ -18,18 +21,21 @@ type PolicyManager struct {
 	policy  Policy
 	pe      *tcpe.PolicyEngine
 	lastRDO pdmsg.RequestDO
-	pg      func(bool)
+	pr      PowerReadyFunc
+
+	negotiatedVoltage uint16
+	negotiatedCurrent uint16
 }
 
 // NewPolicyManager creates a new PolicyManager which will use the given
 // policy engine to negotiate power with the power source.
-// powerGood is called when the power state changes. It is called with true
+// PowerReadyFunc is called when the power state changes. It is called with true
 // when power is successfully negotiated and ready for use. It is called with
 // false when the power source is disconnected or the power negotiation fails.
-func NewPolicyManager(pe *tcpe.PolicyEngine, powerGood func(bool)) *PolicyManager {
+func NewPolicyManager(pe *tcpe.PolicyEngine, pr PowerReadyFunc) *PolicyManager {
 	pm := &PolicyManager{
 		pe: pe,
-		pg: powerGood,
+		pr: pr,
 	}
 	pe.SetCapabilityEvaluator(pm)
 	pe.SetEventHandler(pm)
@@ -53,11 +59,11 @@ func (pm *PolicyManager) SetPolicy(p Policy) error {
 func (pm *PolicyManager) HandleEvent(e tcpe.Event) {
 	switch e {
 	case tcpe.EventPowerReady:
-		pm.pg(true)
+		pm.pr(true, pm.negotiatedVoltage, pm.negotiatedCurrent)
 	case tcpe.EventPowerNotReady:
-		pm.pg(false)
+		pm.pr(false, 0, 0)
 	case tcpe.EventRejected:
-		pm.pg(false)
+		pm.pr(false, pm.negotiatedVoltage, pm.negotiatedCurrent)
 		pm.pe.Reset()
 	}
 }
@@ -72,6 +78,21 @@ func (pm *PolicyManager) EvaluateCapabilities(pdos []pdmsg.PDO) pdmsg.RequestDO 
 		pm.lastRDO = pdmsg.EmptyRequestDO
 	} else {
 		pm.lastRDO = p.EvaluateCapabilities(pdos)
+	}
+
+	pm.negotiatedVoltage = 0
+	pm.negotiatedCurrent = 0
+	pos := pm.lastRDO.SelectedObjectPosition()
+	if pos > 0 && pos <= uint8(len(pdos)) {
+		pdo := pdos[pos-1]
+		switch pdo.Type() {
+		case pdmsg.PDOTypeFixedSupply:
+			pm.negotiatedVoltage = pdmsg.FixedSupplyPDO(pdo).Voltage()
+			pm.negotiatedCurrent = pm.lastRDO.FixedMaxOperatingCurrent()
+		case pdmsg.PDOTypePPS:
+			pm.negotiatedVoltage = pm.lastRDO.PPSOutputVoltage()
+			pm.negotiatedCurrent = pm.lastRDO.PPSOutputCurrent()
+		}
 	}
 	return pm.lastRDO
 }
