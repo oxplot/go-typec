@@ -11,26 +11,43 @@ import (
 	"github.com/oxplot/go-typec/tcpe"
 )
 
+// GetVoltageCurrent returns the voltage and current represented by the pdo and
+// rdo. This function is usually used inside a PowerReadyFunc implemntation to
+// get the negotiated voltage and current.
+func GetVoltageCurrent(pdo pdmsg.PDO, rdo pdmsg.RequestDO) (uint16, uint16) {
+	switch pdo.Type() {
+	case pdmsg.PDOTypeFixedSupply:
+		return pdmsg.FixedSupplyPDO(pdo).Voltage(), rdo.FixedMaxOperatingCurrent()
+	case pdmsg.PDOTypePPS:
+		return rdo.PPSOutputVoltage(), rdo.PPSOutputCurrent()
+	default:
+		return 0, 0
+	}
+}
+
 // PowerReadyFunc is a function that is called when the power state changes.
-type PowerReadyFunc func(isPowerReady bool, negotiatedVoltage uint16, negotiatedCurrent uint16)
+// If power is ready, pdo and rdo are the set to the negotiated power profile
+// and request.
+type PowerReadyFunc func(isPowerReady bool, pdo pdmsg.PDO, rdo pdmsg.RequestDO)
 
 // PolicyManager manages the policy engine and provides a simple interface for
 // negotiating power with a power source.
 type PolicyManager struct {
-	mu      sync.Mutex
-	policy  Policy
-	pe      *tcpe.PolicyEngine
-	lastRDO pdmsg.RequestDO
-	pr      PowerReadyFunc
+	mu     sync.Mutex
+	policy Policy
+	pe     *tcpe.PolicyEngine
+	pr     PowerReadyFunc
 
 	last struct {
-		negotiatedVoltage uint16
-		negotiatedCurrent uint16
-		powerReady        bool
+		pdo        pdmsg.PDO
+		rdo        pdmsg.RequestDO
+		powerReady bool
 	}
 
-	negotiatedVoltage uint16
-	negotiatedCurrent uint16
+	negotiated struct {
+		pdo pdmsg.PDO
+		rdo pdmsg.RequestDO
+	}
 }
 
 // NewPolicyManager creates a new PolicyManager which will use the given
@@ -68,26 +85,22 @@ func (pm *PolicyManager) SetPolicy(p Policy, forceRenegotiate bool) error {
 func (pm *PolicyManager) HandleEvent(e tcpe.Event) {
 	switch e {
 	case tcpe.EventPowerReady:
-		if !pm.last.powerReady || pm.last.negotiatedVoltage != pm.negotiatedVoltage || pm.last.negotiatedCurrent != pm.negotiatedCurrent {
-			pm.pr(true, pm.negotiatedVoltage, pm.negotiatedCurrent)
+		if !pm.last.powerReady || pm.last.pdo != pm.negotiated.pdo || pm.last.rdo != pm.negotiated.rdo {
+			pm.pr(true, pm.negotiated.pdo, pm.negotiated.rdo)
 		}
 		pm.last.powerReady = true
-		pm.last.negotiatedVoltage = pm.negotiatedVoltage
-		pm.last.negotiatedCurrent = pm.negotiatedCurrent
+		pm.last.pdo = pm.negotiated.pdo
+		pm.last.rdo = pm.negotiated.rdo
 	case tcpe.EventPowerNotReady:
 		if pm.last.powerReady {
 			pm.pr(false, 0, 0)
 		}
 		pm.last.powerReady = false
-		pm.last.negotiatedVoltage = 0
-		pm.last.negotiatedCurrent = 0
 	case tcpe.EventRejected:
 		if pm.last.powerReady {
-			pm.pr(false, 0, 0)
+			pm.pr(false, pm.last.pdo, pm.last.rdo)
 		}
 		pm.last.powerReady = false
-		pm.last.negotiatedVoltage = 0
-		pm.last.negotiatedCurrent = 0
 		pm.pe.Reset()
 	}
 }
@@ -99,26 +112,17 @@ func (pm *PolicyManager) EvaluateCapabilities(pdos []pdmsg.PDO) pdmsg.RequestDO 
 	p := pm.policy
 	pm.mu.Unlock()
 	if p == nil {
-		pm.lastRDO = pdmsg.EmptyRequestDO
+		pm.negotiated.rdo = pdmsg.EmptyRequestDO
 	} else {
-		pm.lastRDO = p.EvaluateCapabilities(pdos)
+		pm.negotiated.rdo = p.EvaluateCapabilities(pdos)
 	}
 
-	pm.negotiatedVoltage = 0
-	pm.negotiatedCurrent = 0
-	pos := pm.lastRDO.SelectedObjectPosition()
+	pm.negotiated.pdo = 0
+	pos := pm.negotiated.rdo.SelectedObjectPosition()
 	if pos > 0 && pos <= uint8(len(pdos)) {
-		pdo := pdos[pos-1]
-		switch pdo.Type() {
-		case pdmsg.PDOTypeFixedSupply:
-			pm.negotiatedVoltage = pdmsg.FixedSupplyPDO(pdo).Voltage()
-			pm.negotiatedCurrent = pm.lastRDO.FixedMaxOperatingCurrent()
-		case pdmsg.PDOTypePPS:
-			pm.negotiatedVoltage = pm.lastRDO.PPSOutputVoltage()
-			pm.negotiatedCurrent = pm.lastRDO.PPSOutputCurrent()
-		}
+		pm.negotiated.pdo = pdos[pos-1]
 	}
-	return pm.lastRDO
+	return pm.negotiated.rdo
 }
 
 // Policy is the interface which simply embeds CapabilityEvaluator.

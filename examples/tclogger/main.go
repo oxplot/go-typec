@@ -16,7 +16,7 @@ const mpn = fusb302.FUSB302BMPX
 func main() {
 	pc := fusb302.New(getI2C(), mpn)
 	pe := tcpe.New(pc)
-	dpm := tcdpm.NewLogger(os.Stdout, "\r\n", nil)
-	pe.SetDPM(dpm)
+	dpm := tcdpm.NewPolicyManager(pe, nil)
+	_ = dpm.SetPolicy(tcdpm.NewLogger(os.Stdout, "\r\n", nil), false)
 	pe.Run(context.Background())
 }
