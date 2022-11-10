@@ -45,13 +45,16 @@ func NewPolicyManager(pe *tcpe.PolicyEngine, pr PowerReadyFunc) *PolicyManager {
 // SetPolicy sets the power management policy. If policy validation fails,
 // non-nil error is returned.
 // SetPolicy can be called concurrently from multiple goroutines.
-func (pm *PolicyManager) SetPolicy(p Policy) error {
+func (pm *PolicyManager) SetPolicy(p Policy, forceRenegotiate bool) error {
 	if err := p.Validate(); err != nil {
 		return err
 	}
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	pm.policy = p
+	if forceRenegotiate {
+		pm.pe.Reset()
+	}
 	return nil
 }
 
