@@ -23,6 +23,12 @@ type PolicyManager struct {
 	lastRDO pdmsg.RequestDO
 	pr      PowerReadyFunc
 
+	last struct {
+		negotiatedVoltage uint16
+		negotiatedCurrent uint16
+		powerReady        bool
+	}
+
 	negotiatedVoltage uint16
 	negotiatedCurrent uint16
 }
@@ -62,11 +68,26 @@ func (pm *PolicyManager) SetPolicy(p Policy, forceRenegotiate bool) error {
 func (pm *PolicyManager) HandleEvent(e tcpe.Event) {
 	switch e {
 	case tcpe.EventPowerReady:
-		pm.pr(true, pm.negotiatedVoltage, pm.negotiatedCurrent)
+		if !pm.last.powerReady || pm.last.negotiatedVoltage != pm.negotiatedVoltage || pm.last.negotiatedCurrent != pm.negotiatedCurrent {
+			pm.pr(true, pm.negotiatedVoltage, pm.negotiatedCurrent)
+		}
+		pm.last.powerReady = true
+		pm.last.negotiatedVoltage = pm.negotiatedVoltage
+		pm.last.negotiatedCurrent = pm.negotiatedCurrent
 	case tcpe.EventPowerNotReady:
-		pm.pr(false, 0, 0)
+		if pm.last.powerReady {
+			pm.pr(false, 0, 0)
+		}
+		pm.last.powerReady = false
+		pm.last.negotiatedVoltage = 0
+		pm.last.negotiatedCurrent = 0
 	case tcpe.EventRejected:
-		pm.pr(false, pm.negotiatedVoltage, pm.negotiatedCurrent)
+		if pm.last.powerReady {
+			pm.pr(false, 0, 0)
+		}
+		pm.last.powerReady = false
+		pm.last.negotiatedVoltage = 0
+		pm.last.negotiatedCurrent = 0
 		pm.pe.Reset()
 	}
 }

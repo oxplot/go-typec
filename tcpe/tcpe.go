@@ -533,7 +533,8 @@ func init() {
 		Name: "sink-hard-reset",
 		Enter: func(pe *PolicyEngine) (*state, error) {
 			pe.notifyEvent(EventPowerNotReady)
-			return stateSinkStartup, pe.pc.SendReset()
+			_ = pe.pc.SendReset()
+			return stateSinkStartup, nil
 		},
 	}
 
