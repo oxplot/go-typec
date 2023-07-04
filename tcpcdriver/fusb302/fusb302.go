@@ -3,6 +3,7 @@
 package fusb302
 
 import (
+	"errors"
 	"time"
 
 	"github.com/oxplot/go-typec"
@@ -254,6 +255,9 @@ func (f *FUSB302) SendReset() error {
 	return typec.ErrTxFailed
 }
 
+// ErrInvalidCCState is returned when the CC state is invalid.
+var ErrInvalidCCState = errors.New("invalid cc state")
+
 // Alert processes all pending interrupts and returns any event generated as a
 // result.
 func (f *FUSB302) Alert() (e typec.Event, err error) {
@@ -305,9 +309,11 @@ func (f *FUSB302) Alert() (e typec.Event, err error) {
 		if (status1A>>regStatus1ATogSSPos)&(regStatus1ATogSSMask) == regStatus1ATogSSSnk1 {
 			pol = regSwitches1TxCC1En
 			meas = regSwitches0MeasCC1
-		} else {
+		} else if (status1A>>regStatus1ATogSSPos)&(regStatus1ATogSSMask) == regStatus1ATogSSSnk2 {
 			pol = regSwitches1TxCC2En
 			meas = regSwitches0MeasCC2
+		} else {
+			return e, ErrInvalidCCState
 		}
 		if err = f.write(regSwitches1, regSwitches1SpecRev1|regSwitches1AutoGCRC|pol); err != nil {
 			return
@@ -394,7 +400,8 @@ const (
 
 	regStatus1A = 0x3D
 
-	regStatus1ATogSSSnk1 = 0x5
+	regStatus1ATogSSSnk1 = 0b101
+	regStatus1ATogSSSnk2 = 0b110
 	regStatus1ATogSSPos  = 3
 	regStatus1ATogSSMask = 0x7
 
